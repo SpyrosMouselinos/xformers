@@ -136,6 +136,7 @@ class _fMHA(torch.autograd.Function):
         ctx.op_fw = op_fw
         ctx.op_bw = op_bw
         ctx.p = inp.p
+        ctx.softcap = inp.softcap
         # This allows to create gradients from a single storage,
         # to avoid a "cat" in the BW pass.
         # The heuristic is approximative, but:
@@ -168,6 +169,7 @@ class _fMHA(torch.autograd.Function):
             attn_bias=_deserialize_bias(ctx.attn_bias_ctx, attn_bias_tensor),
             p=ctx.p,
             scale=ctx.scale,
+            softcap=ctx.softcap,
         )
         op_ctx = Context(
             lse=lse,
@@ -193,6 +195,7 @@ def memory_efficient_attention(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
     *,
     op: Optional[AttentionOp] = None,
     output_dtype: Optional[torch.dtype] = None,
@@ -224,6 +227,10 @@ def memory_efficient_attention(
         attn = query @ key.transpose(-2, -1)
         if attn_bias is not None:
             attn = attn + attn_bias
+        if softcap > 0.0:
+            attn = attn / softcap
+            attn = F.tanh(attn)
+            attn = attn * softcap
         attn = attn.softmax(-1)
         attn = F.dropout(attn, p)
         attn = attn @ value
@@ -240,6 +247,9 @@ def memory_efficient_attention(
 
         # With a dropout of 0.2
         y = xops.memory_efficient_attention(q, k, v, p=0.2)
+
+        # With a dropout of 0.2 and softcap equal to 50.0
+        y = xops.memory_efficient_attention(q, k, v, p=0.2, softcap=50.0)
 
         # Causal attention
         y = xops.memory_efficient_attention(
@@ -292,6 +302,8 @@ def memory_efficient_attention(
     :parameter p: Dropout probability. Disabled if set to ``0.0``
     :parameter scale: Scaling factor for ``Q @ K.transpose()``. If set to ``None``, the default \
         scale (q.shape[-1]**-0.5) will be used.
+    :parameter softcap: Using softcap function on the logits of the attention. \
+        The logits are calculated by: logits ← soft_cap * tanh(logits/soft_cap)
     :parameter op: The operators to use - see :attr:`xformers.ops.AttentionOpBase`. \
         If set to ``None`` (recommended), xFormers \
         will dispatch to the best available operator, depending on the inputs \
@@ -307,6 +319,7 @@ def memory_efficient_attention(
             attn_bias=attn_bias,
             scale=scale,
             output_dtype=output_dtype,
+            softcap=softcap,
         ),
         op=op,
     )
@@ -314,7 +327,7 @@ def memory_efficient_attention(
 
 torch.library.define(
     "xformer::memory_efficient_attention_forward",
-    "(Tensor q, Tensor k, Tensor v, Tensor? b = None, float? p = 0.0, float? scale = None) -> Tensor",
+    "(Tensor q, Tensor k, Tensor v, Tensor? b = None, float? p = 0.0, float? scale = None, float? softcap = 0.0) -> Tensor",
 )
 
 
@@ -333,6 +346,7 @@ def memory_efficient_attention_forward_torch_wrapper(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
 ) -> torch.Tensor:
     """
     This provides a torch-compilable wrapper op to
@@ -345,12 +359,7 @@ def memory_efficient_attention_forward_torch_wrapper(
         - K != Kv
     """
     return memory_efficient_attention_forward(
-        query,
-        key,
-        value,
-        attn_bias,
-        p,
-        scale,
+        query, key, value, attn_bias, p, scale, softcap
     )
 
 
@@ -361,6 +370,7 @@ def memory_efficient_attention_forward(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
     *,
     op: Optional[Type[AttentionFwOpBase]] = None,
     output_dtype: Optional[torch.dtype] = None,
@@ -377,6 +387,7 @@ def memory_efficient_attention_forward(
             attn_bias=attn_bias,
             scale=scale,
             output_dtype=output_dtype,
+            softcap=softcap,
         ),
         op=op,
     )
@@ -389,6 +400,7 @@ def memory_efficient_attention_forward_requires_grad(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
     *,
     op: Optional[Type[AttentionFwOpBase]] = None,
     output_dtype: Optional[torch.dtype] = None,
@@ -412,6 +424,7 @@ def memory_efficient_attention_forward_requires_grad(
             attn_bias=attn_bias,
             scale=scale,
             output_dtype=output_dtype,
+            softcap=softcap,
         ),
         op=op,
     )
@@ -428,6 +441,7 @@ def memory_efficient_attention_backward(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
     *,
     op: Optional[Type[AttentionBwOpBase]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -446,7 +460,13 @@ def memory_efficient_attention_backward(
     gradients = _memory_efficient_attention_backward(
         Context(out=output, lse=lse),
         Inputs(
-            query=query, key=key, value=value, p=p, attn_bias=attn_bias, scale=scale
+            query=query,
+            key=key,
+            value=value,
+            p=p,
+            attn_bias=attn_bias,
+            scale=scale,
+            softcap=softcap,
         ),
         grad,
         op=op,
@@ -468,7 +488,15 @@ def _memory_efficient_attention(
     op_fw = _serialize_op(op[0] if op is not None else None)
     op_bw = _serialize_op(op[1] if op is not None else None)
     return _fMHA.apply(
-        op_fw, op_bw, inp.query, inp.key, inp.value, inp.attn_bias, inp.p, inp.scale
+        op_fw,
+        op_bw,
+        inp.query,
+        inp.key,
+        inp.value,
+        inp.attn_bias,
+        inp.p,
+        inp.scale,
+        inp.softcap,
     )[0].reshape(output_shape)
 
 
@@ -591,6 +619,7 @@ def memory_efficient_attention_partial(
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None,
     p: float = 0.0,
     scale: Optional[float] = None,
+    softcap: float = 0.0,
     *,
     op: Optional[Union[AttentionOp, Type[AttentionFwOpBase]]] = None,
     output_dtype: Optional[torch.dtype] = None,
@@ -617,6 +646,7 @@ def memory_efficient_attention_partial(
         attn_bias=attn_bias,
         scale=scale,
         output_dtype=output_dtype,
+        softcap=softcap,
         is_partial=True,
     )
 
@@ -652,6 +682,7 @@ def memory_efficient_attention_partial(
         inp.scale,
         inp.output_dtype,
         inp.is_partial,
+        inp.softcap,
     )
 
 

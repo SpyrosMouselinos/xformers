@@ -104,8 +104,8 @@ try:
         window_right: int,
         return_softmax: bool,
         block_tables: Optional[torch.Tensor],
+        softcap: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        softcap = 0.0
         if _USE_PT_FLASH_ATTN:
             (
                 attention,
@@ -212,6 +212,7 @@ try:
         window_right,
         return_softmax,
         block_tables,
+        softcap,
     ):
         out = torch.empty_like(query)
         if cu_seqlens_q is None:
@@ -251,8 +252,8 @@ try:
         window_left: int,
         window_right: int,
         rng_state: torch.Tensor,
+        softcap: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        softcap = 0.0
         if _USE_PT_FLASH_ATTN:
             assert softcap == 0.0
             if rng_state is not None:
@@ -455,6 +456,7 @@ def _convert_input_format(
         attn_bias=attn_bias,
         p=inp.p,
         scale=inp.scale,
+        softcap=inp.softcap,
         output_dtype=inp.output_dtype,
         is_partial=inp.is_partial,
     )
@@ -690,6 +692,7 @@ class FwOp(AttentionFwOpBase):
                 window_right=win_right,
                 return_softmax=return_softmax,
                 block_tables=block_tables,
+                softcap=inp.softcap,
             )
             out = out.reshape(out_shape)
         else:
@@ -817,6 +820,7 @@ class BwOp(AttentionBwOpBase):
                     window_left=win_left,
                     window_right=win_right,
                     rng_state=ctx.rng_state if inp.p > 0.0 else None,
+                    softcap=inp.softcap,
                 )
             )
         else:
