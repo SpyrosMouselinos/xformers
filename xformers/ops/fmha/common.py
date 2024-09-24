@@ -65,6 +65,7 @@ class Inputs:
     attn_bias: Optional[Union[torch.Tensor, AttentionBias]] = None
     p: float = 0.0
     scale: Optional[float] = None
+    softcap: float = 0.0
     output_dtype: Optional[torch.dtype] = None
     is_partial: bool = False
 
@@ -198,6 +199,8 @@ class Inputs:
                 )
         if self.p < 0.0 or self.p > 1.0:
             raise ValueError(f"Invalid dropout probability: p={self.p}")
+        if self.softcap < 0.0:
+            raise ValueError(f"Invalid softcap value: softcap={self.softcap}")
         # Check that shapes match between inputs
         B, Mq = self.query.shape[:2]
         K = self.query.shape[-1]

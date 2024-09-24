@@ -104,8 +104,8 @@ try:
         window_right: int,
         return_softmax: bool,
         block_tables: Optional[torch.Tensor],
+        softcap: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        softcap = 0.0
         if _USE_PT_FLASH_ATTN:
             (
                 attention,
@@ -212,6 +212,7 @@ try:
         window_right,
         return_softmax,
         block_tables,
+        softcap,
     ):
         out = torch.empty_like(query)
         if cu_seqlens_q is None:
@@ -251,8 +252,8 @@ try:
         window_left: int,
         window_right: int,
         rng_state: torch.Tensor,
+        sofctcap: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        softcap = 0.0
         if _USE_PT_FLASH_ATTN:
             assert softcap == 0.0
             if rng_state is not None:
