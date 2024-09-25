@@ -318,7 +318,7 @@ def memory_efficient_attention(
 
 torch.library.define(
     "xformer::memory_efficient_attention_forward",
-    "(Tensor q, Tensor k, Tensor v, Tensor? b = None, float? p = 0.0, float? scale = None, softcap = 0.0, float?) -> Tensor",
+    "(Tensor q, Tensor k, Tensor v, Tensor? b = None, float? p = 0.0, float? scale = None, float? softcap = 0.0) -> Tensor",
 )
 
 
