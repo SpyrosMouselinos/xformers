@@ -227,6 +227,10 @@ def memory_efficient_attention(
         attn = query @ key.transpose(-2, -1)
         if attn_bias is not None:
             attn = attn + attn_bias
+        if softcap > 0.0:
+            attn = attn / softcap
+            attn = F.tanh(attn)
+            attn = attn * softcap
         attn = attn.softmax(-1)
         attn = F.dropout(attn, p)
         attn = attn @ value
@@ -243,6 +247,9 @@ def memory_efficient_attention(
 
         # With a dropout of 0.2
         y = xops.memory_efficient_attention(q, k, v, p=0.2)
+
+        # With a dropout of 0.2 and softcap equal to 50.0
+        y = xops.memory_efficient_attention(q, k, v, p=0.2, softcap=50.0)
 
         # Causal attention
         y = xops.memory_efficient_attention(
@@ -295,6 +302,8 @@ def memory_efficient_attention(
     :parameter p: Dropout probability. Disabled if set to ``0.0``
     :parameter scale: Scaling factor for ``Q @ K.transpose()``. If set to ``None``, the default \
         scale (q.shape[-1]**-0.5) will be used.
+    :parameter softcap: Using softcap function on the logits of the attention. \
+        The logits are calculated by: logits ← soft_cap * tanh(logits/soft_cap)
     :parameter op: The operators to use - see :attr:`xformers.ops.AttentionOpBase`. \
         If set to ``None`` (recommended), xFormers \
         will dispatch to the best available operator, depending on the inputs \
